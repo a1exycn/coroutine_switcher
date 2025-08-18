@@ -13,17 +13,6 @@
 
 class Job_Base {
     friend class Coroutine_Switcher;
-public:
-
-    struct promise_base {
-
-        promise_base* parent;
-        size_t num_children;
-
-        promise_base();
-
-    };
-
 protected:
 
     virtual std::coroutine_handle<void> get_handle() = 0;
@@ -35,23 +24,21 @@ template <typename T>
 class Job : public Job_Base {
 public:
 
-    struct promise_type : public Job_Base::promise_base {
+    struct promise_type {
 
         std::shared_ptr<T> $value;
+        std::shared_ptr<size_t> $parent_num_children;
+        std::coroutine_handle<void> handle_parent;
 
         void unhandled_exception() noexcept {}
         
 
         Job get_return_object() noexcept {
-            using Handle = std::coroutine_handle<promise_base>;
-            Handle handle = Handle::from_address(
-                Coroutine_Switcher::get_current_handle().address()
+            handle_parent = Coroutine_Switcher::get_current_handle();
+
+            return Job(
+                std::coroutine_handle<promise_type>::from_promise(*this)
             );
-            promise_base& promise = handle.promise();
-
-            this->parent = &promise;
-
-            return Job{std::coroutine_handle<promise_type>::from_promise(*this)};
         }
         
 
@@ -66,10 +53,12 @@ public:
 
 
         std::suspend_always final_suspend() noexcept {
-            parent->num_children -= 1;
+            if(handle_parent) {
+                *$parent_num_children -= 1;
 
-            if (parent->num_children == 0)
-                // TODO: create friend interface within Coroutine_Switcher to enqueue parent context
+                if(*$parent_num_children == 0)
+                    Coroutine_Switcher::enqueue_internal(handle_parent);
+            }
 
             return {};
         }
@@ -115,17 +104,15 @@ public:
 
     Job& operator=(const Job&) = delete;
 
-    std::shared_ptr<T> get_return_value() const {
-        return ret;
-    }
 
-
-
+    
 
 }; /* end class Job */
 
 
 class Coroutine_Switcher {
+    template<class> friend class Job;
+    template<class U> friend struct Job<U>::promise_type;
 private:
 
     size_t size_queue_max;
@@ -153,6 +140,10 @@ private:
      */
     void run_internal(std::coroutine_handle<void> handle_progenitor);
 
+    inline std::coroutine_handle<void> get_current_handle() {
+        return current_handle;
+    }
+
 public:
 
     ~Coroutine_Switcher();
@@ -162,8 +153,6 @@ public:
     static bool enqueue(Job_Base& job);
 
     static void run(Job_Base& job);
-
-    static std::coroutine_handle<void> get_current_handle();
 
 }; /* end class Coroutine_Switcher */
 

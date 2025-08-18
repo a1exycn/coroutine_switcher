@@ -1,13 +1,5 @@
 #include "coroutine_switcher.h"
 
-/* start Job_Base definitions */
-
-Job_Base::promise_base::promise_base() :
-    parent{nullptr},
-    num_children{0}
-{}
-
-/* end Job_Base definitions */
 /* start Coroutine_Switcher definitions */
 
 Coroutine_Switcher* Coroutine_Switcher::instance = nullptr;
@@ -59,20 +51,12 @@ void Coroutine_Switcher::initialize(size_t size_queue_max = 100) {
         instance = new Coroutine_Switcher(size_queue_max);
 }
 
-
 bool Coroutine_Switcher::enqueue(Job_Base& job) {
     return instance->enqueue_internal(job.get_handle());
 }
 
-
 void Coroutine_Switcher::run(Job_Base& job) {
     instance->run_internal(job.get_handle());
 }
-
-
-std::coroutine_handle<void> Coroutine_Switcher::get_current_handle() {
-    return instance->current_handle;
-}
-
 
 /* end Coroutine_Switcher definitions */
