@@ -7,13 +7,17 @@
 #include <iostream>
 
 #include <deque>
+#include <unordered_map>
 
-#include <functional>
 #include <coroutine>
 
 class Job_Base {
     friend class Coroutine_Switcher;
 protected:
+
+    static std::unordered_map<
+        std::coroutine_handle<void>, size_t
+    > handle_to_num_children;
 
     virtual std::coroutine_handle<void> get_handle() = 0;
 
@@ -27,18 +31,26 @@ public:
     struct promise_type {
 
         std::shared_ptr<T> $value;
-        std::shared_ptr<size_t> $parent_num_children;
         std::coroutine_handle<void> handle_parent;
+
+
+        promise_type() :
+            $value{nullptr},
+            handle_parent{nullptr}
+        {}
+
 
         void unhandled_exception() noexcept {}
         
 
         Job get_return_object() noexcept {
-            handle_parent = Coroutine_Switcher::get_current_handle();
+            using Handle = std::coroutine_handle<promise_type>;
 
-            return Job(
-                std::coroutine_handle<promise_type>::from_promise(*this)
-            );
+            Handle handle = Handle::from_promise(*this);
+
+            Job_Base::handle_to_num_children[handle] = 0;
+
+            return Job(handle);
         }
         
 
@@ -53,12 +65,19 @@ public:
 
 
         std::suspend_always final_suspend() noexcept {
-            if(handle_parent) {
-                *$parent_num_children -= 1;
 
-                if(*$parent_num_children == 0)
+            if (handle_parent) {
+                auto& num_children = Job_Base::handle_to_num_children[handle_parent];
+
+                --num_children;
+
+                if (num_children == 0)
                     Coroutine_Switcher::enqueue_internal(handle_parent);
             }
+
+            Job_Base::handle_to_num_children.erase(
+                std::coroutine_handle<void>::from_promise(*this)
+            );
 
             return {};
         }
@@ -104,8 +123,72 @@ public:
 
     Job& operator=(const Job&) = delete;
 
-
+    ~Job() {
+        if (handle) {
+            handle.destroy();
+        }
+    }
     
+
+    /**
+     * @brief awaiter for when we need to obtain a result 
+     * from another job
+     */
+    struct Awaiter_Result {
+        friend class Job;
+    private:
+
+        std::coroutine_handle<promise_type> handle;
+
+        Awaiter_Result(std::coroutine_handle<promise_type> handle) :
+            handle{handle}
+        {}
+
+    public:
+
+        Awaiter_Result(const Awaiter_Result&) = delete;
+
+        Awaiter_Result(Awaiter_Result&& other) :
+            handle{other.handle}
+        {
+            other.handle = {};
+        }
+
+        Awaiter_Result& operator=(const Awaiter_Result&) = delete;
+
+        Awaiter_Result& operator=(Awaiter_Result&& other) noexcept {
+            if (this != &other) {
+                handle = other.handle;
+                other.handle = {};
+            }
+            return *this;
+        }
+
+
+        bool await_ready() const {
+            return handle.done();
+        }
+
+
+        void await_suspend(std::coroutine_handle<void> handle_awaiting) {
+            this->handle.promise().handle_parent = handle_awaiting;
+
+            ++Job_Base::handle_to_num_children[handle_awaiting];
+
+            Coroutine_Switcher::enqueue_internal(handle_awaiting);
+        }
+
+
+        std::shared_ptr<T> await_resume() {
+            return this->handle.promise().$value;
+        }
+
+    }; /* end struct Awaiter_Result */
+
+
+    Awaiter_Result get_result() {
+        return Awaiter_Result(handle);
+    }
 
 }; /* end class Job */
 
@@ -120,8 +203,6 @@ private:
     std::deque<
         std::coroutine_handle<void>
     > queue_handles;
-
-    std::coroutine_handle<void> current_handle;
 
     static Coroutine_Switcher* instance;
 
@@ -140,19 +221,15 @@ private:
      */
     void run_internal(std::coroutine_handle<void> handle_progenitor);
 
-    inline std::coroutine_handle<void> get_current_handle() {
-        return current_handle;
-    }
-
 public:
 
     ~Coroutine_Switcher();
 
     static void initialize(size_t size_queue_max = 100);
 
-    static bool enqueue(Job_Base& job);
+    static bool enqueue(Job_Base* job);
 
-    static void run(Job_Base& job);
+    static void run(Job_Base* job);
 
 }; /* end class Coroutine_Switcher */
 

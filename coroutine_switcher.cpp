@@ -2,6 +2,10 @@
 
 /* start Coroutine_Switcher definitions */
 
+std::unordered_map<
+    std::coroutine_handle<void>, size_t
+> Job_Base::handle_to_num_children = {};
+
 Coroutine_Switcher* Coroutine_Switcher::instance = nullptr;
 
 Coroutine_Switcher::Coroutine_Switcher(size_t size_queue_max) :
